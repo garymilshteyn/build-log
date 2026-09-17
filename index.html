@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Build Log</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="app">
+      <header class="page-header">
+        <p class="eyebrow">A little progress, one project at a time.</p>
+        <h1>Build Log</h1>
+        <p>Keep your projects and their next steps in one place.</p>
+      </header>
+
+      <section class="panel" aria-labelledby="add-heading">
+        <h2 id="add-heading">Add a project</h2>
+        <form id="project-form">
+          <div class="form-row">
+            <div class="field">
+              <label for="project-name">Project name <span>(required)</span></label>
+              <input id="project-name" name="name" type="text" required
+                placeholder="e.g. Personal website">
+            </div>
+            <div class="field">
+              <label for="project-status">Status</label>
+              <select id="project-status" name="status" required>
+                <option value="Planned">Planned</option>
+                <option value="In progress">In progress</option>
+                <option value="Done">Done</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="next-action">Next action <span>(optional)</span></label>
+            <input id="next-action" name="nextAction" type="text"
+              placeholder="e.g. Sketch the home page">
+          </div>
+          <button type="submit">Add project</button>
+          <p id="error-message" class="feedback error" role="alert"></p>
+          <p id="success-message" class="feedback success" role="status"></p>
+        </form>
+      </section>
+
+      <section class="projects-section" aria-labelledby="projects-heading">
+        <div class="section-heading">
+          <h2 id="projects-heading">Your projects</h2>
+          <p>Saved in this browser.</p>
+        </div>
+        <p id="empty-state" class="empty-state">No projects yet. Add your first project above.</p>
+        <ul id="project-list" class="project-list" role="list"></ul>
+      </section>
+      <noscript><p>Build Log needs JavaScript to add and save projects. Enable it in your browser, then refresh.</p></noscript>
+    </main>
+  </body>
+</html>

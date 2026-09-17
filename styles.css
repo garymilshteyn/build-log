@@ -1,0 +1,235 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #202b28;
+  background: #f5f6f2;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  width: min(100% - 2rem, 48rem);
+  margin: 3.5rem auto;
+}
+
+.page-header {
+  margin-bottom: 2rem;
+}
+
+.eyebrow {
+  color: #3c6659;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+h1, h2, h3, p {
+  margin: 0;
+}
+
+h1 {
+  margin: 0.25rem 0 0.5rem;
+  font-size: clamp(2.25rem, 6vw, 3rem);
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+}
+
+h2 {
+  font-size: 1.25rem;
+}
+
+.page-header > p:last-child,
+.section-heading p,
+label span {
+  color: #58635d;
+}
+
+.panel,
+.project {
+  border: 1px solid #dce2d9;
+  border-radius: 0.875rem;
+  background: #fff;
+}
+
+.panel {
+  padding: 1.5rem;
+}
+
+form {
+  margin-top: 1.25rem;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.field {
+  min-width: 0;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+label span {
+  font-weight: 400;
+}
+
+input, select, button {
+  min-height: 2.875rem;
+  border-radius: 0.375rem;
+  font: inherit;
+}
+
+input, select {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid #85968b;
+  color: inherit;
+  background: #fff;
+}
+
+input::placeholder {
+  color: #6a736e;
+}
+
+button {
+  padding: 0.625rem 1.125rem;
+  border: 1px solid transparent;
+  color: #fff;
+  background: #265e4d;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1c493b;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 3px solid #366fbd;
+  outline-offset: 3px;
+}
+
+.feedback:not(:empty) {
+  margin-top: 0.875rem;
+}
+
+.error {
+  color: #a52d25;
+}
+
+.success {
+  color: #265e4d;
+}
+
+.projects-section {
+  margin-top: 2.5rem;
+}
+
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.section-heading p {
+  font-size: 0.875rem;
+}
+
+.empty-state {
+  padding: 2rem 1.5rem;
+  border: 1px dashed #acb9ae;
+  border-radius: 0.875rem;
+  color: #58635d;
+  text-align: center;
+}
+
+.project-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.project {
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.project-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.project h3 {
+  min-width: 0;
+  flex: 1 1 12rem;
+  font-size: 1.125rem;
+}
+
+.status {
+  padding: 0.2rem 0.65rem;
+  border-radius: 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.status-planned {
+  color: #515c63;
+  background: #edf0f2;
+}
+
+.status-in-progress {
+  color: #7c4b0b;
+  background: #fff1d8;
+}
+
+.status-done {
+  color: #265e4d;
+  background: #e6f3eb;
+}
+
+.next-action {
+  margin-top: 0.625rem;
+  color: #58635d;
+}
+
+@media (max-width: 36rem) {
+  .app {
+    margin: 2rem auto;
+  }
+
+  .panel, .project {
+    padding: 1.25rem;
+  }
+
+  .form-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  button {
+    width: 100%;
+  }
+}
