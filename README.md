@@ -56,9 +56,11 @@ Projects have stable IDs so deletion targets a single record, not a name or list
 
   Try adding a project or confirming a deletion. An error should appear, the form should keep your entry, and the failed operation should not change saved projects. Refresh to restore normal storage behavior, then confirm adding and deleting work again. This simulation does not delete saved projects.
 
-## Regression checks
+## Automated tests
 
-With Node.js 18 or newer available, run from the repository folder:
+The [Automated tests workflow](.github/workflows/tests.yml) runs the existing regression tests on pull requests targeting `main` and pushes to `main`. It uses Node.js 24 LTS on Ubuntu with read-only repository permissions and reports any test failures in GitHub Actions.
+
+To run the same check locally, use a supported Node.js LTS version (Node.js 24 to match CI) and run from the repository folder:
 
 ```sh
 node --test tests/app.test.cjs
