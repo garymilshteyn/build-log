@@ -215,6 +215,16 @@ button:focus-visible {
   color: #58635d;
 }
 
+.delete-button {
+  color: #a52d25;
+  border-color: #dce2d9;
+  background: #fff;
+}
+
+.delete-button:hover {
+  background: #fff1ef;
+}
+
 @media (max-width: 36rem) {
   .app {
     margin: 2rem auto;

@@ -3,10 +3,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const { randomUUID } = require("node:crypto");
 
 const source = fs.readFileSync(path.join(__dirname, "../app.js"), "utf8");
 const key = "build-log.projects";
-const existing = { name: "Existing project", status: "Done", nextAction: "Keep me" };
+const existing = { id: "existing-project", name: "Existing project", status: "Done", nextAction: "Keep me" };
 
 // Minimal DOM/storage doubles; these tests do not simulate browser layout or input validation.
 function element() {
@@ -15,12 +16,13 @@ function element() {
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
     addEventListener(type, callback) { this.listeners[type] = callback; },
+    setAttribute(name, value) { this[name] = value; },
     setCustomValidity() {}, reportValidity() {}, focus() {},
   };
 }
 
-function browser() {
-  const state = { saved: JSON.stringify([existing]), failRead: false, failWrite: false };
+function browser(initialProjects = [existing]) {
+  const state = { saved: JSON.stringify(initialProjects), failRead: false, failWrite: false, writes: 0 };
   const storage = {
     getItem(storageKey) {
       assert.equal(storageKey, key);
@@ -30,6 +32,7 @@ function browser() {
     setItem(storageKey, value) {
       assert.equal(storageKey, key);
       if (state.failWrite) throw new Error("Storage full");
+      state.writes++;
       state.saved = value;
     },
   };
@@ -37,13 +40,21 @@ function browser() {
   function tab() {
     const elements = {};
     const listeners = {};
+    const confirmation = { answer: true, messages: [], onConfirm() {} };
     const document = {
       querySelector(selector) { return elements[selector] ??= element(); },
       createElement: element,
       createTextNode(text) { return { textContent: text }; },
     };
-    const window = { addEventListener(type, callback) { listeners[type] = callback; } };
-    vm.runInNewContext(source, { document, window, localStorage: storage });
+    const window = {
+      addEventListener(type, callback) { listeners[type] = callback; },
+      confirm(message) {
+        confirmation.messages.push(message);
+        confirmation.onConfirm();
+        return confirmation.answer;
+      },
+    };
+    vm.runInNewContext(source, { document, window, localStorage: storage, crypto: { randomUUID } });
     const name = elements["#project-name"];
     const status = elements["#project-status"];
     const nextAction = elements["#next-action"];
@@ -51,6 +62,9 @@ function browser() {
     form.reset = () => { name.value = ""; status.value = "Planned"; nextAction.value = ""; };
     return {
       elements,
+      confirmation,
+      deleteButton(index = 0) { return elements["#project-list"].children[index].children[0].children[2]; },
+      remove(index = 0) { this.deleteButton(index).listeners.click(); },
       draft(projectName) {
         name.value = projectName;
         status.value = "In progress";
@@ -153,4 +167,161 @@ test("write failure keeps the draft; retry preserves the other tab's addition ex
   b.submit();
   assert.deepEqual(JSON.parse(app.state.saved).map(project => project.name), ["Existing project", "Tab A test", "Tab B test"]);
   assert.equal(b.elements["#project-name"].value, "");
+});
+
+test("legacy records receive distinct persisted IDs without changing fields, order, or existing IDs", () => {
+  const legacy = { name: "Same name", status: "Planned", nextAction: "", extra: { keep: true } };
+  const original = [existing, legacy, legacy];
+  const app = browser(original);
+  const a = app.tab();
+  const migrated = JSON.parse(app.state.saved);
+  assert.deepEqual(migrated[0], existing);
+  assert.equal(new Set(migrated.map(project => project.id)).size, 3);
+  for (const project of migrated.slice(1)) {
+    assert.equal(typeof project.id, "string");
+    const { id, ...fields } = project;
+    assert.deepEqual(fields, legacy);
+  }
+  assert.equal(app.state.writes, 1);
+  const saved = app.state.saved;
+  assert.deepEqual(app.tab().names(), a.names());
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 1, "Already-migrated data must not be rewritten on load");
+});
+
+test("failed ID migration preserves the original data and shows an error; refresh can retry", () => {
+  const app = browser([{ name: "Legacy", status: "Done", nextAction: "Keep this" }]);
+  const saved = app.state.saved;
+  app.state.failWrite = true;
+  const tab = app.tab();
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 0);
+  assert.deepEqual(tab.names(), []);
+  assert.match(tab.elements["#error-message"].textContent, /couldn’t be loaded or prepared/);
+  app.state.failWrite = false;
+  assert.deepEqual(app.tab().names(), ["Legacy"]);
+  assert.ok(JSON.parse(app.state.saved)[0].id);
+});
+
+test("invalid and duplicate IDs are rejected without rewriting stored data", () => {
+  for (const records of [[existing, existing], [{ ...existing, id: " " }], [{ ...existing, id: null }]]) {
+    const app = browser(records);
+    const saved = app.state.saved;
+    const tab = app.tab();
+    assert.deepEqual(tab.names(), []);
+    assert.ok(tab.elements["#error-message"].textContent);
+    tab.draft("Do not overwrite");
+    tab.submit();
+    assert.equal(app.state.saved, saved);
+    assert.equal(app.state.writes, 0);
+  }
+});
+
+test("Cancel leaves storage, list, draft, and feedback unchanged", () => {
+  const app = browser();
+  const tab = app.tab();
+  tab.draft("My draft");
+  tab.elements["#success-message"].textContent = "Previous message";
+  const saved = app.state.saved;
+  const button = tab.deleteButton();
+  assert.equal(button.textContent, "Delete");
+  assert.equal(button.type, "button");
+  assert.equal(button["aria-label"], "Delete project: Existing project");
+  tab.confirmation.answer = false;
+  app.state.failRead = true; // Cancel must not even attempt a storage read.
+  tab.remove();
+  assert.equal(tab.confirmation.messages.length, 1);
+  assert.match(tab.confirmation.messages[0], /Existing project/);
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 0);
+  assert.deepEqual(tab.names(), ["Existing project"]);
+  assert.equal(tab.elements["#project-name"].value, "My draft");
+  assert.equal(tab.elements["#success-message"].textContent, "Previous message");
+  assert.equal(tab.elements["#error-message"].textContent, "");
+});
+
+test("deleting one of two identical legacy records removes only its ID and persists after reload", () => {
+  const duplicate = { name: "Identical", status: "Planned", nextAction: "Same action" };
+  const app = browser([duplicate, duplicate, existing]);
+  const tab = app.tab();
+  tab.draft("Keep my draft");
+  const before = JSON.parse(app.state.saved);
+  tab.remove(1);
+  assert.deepEqual(JSON.parse(app.state.saved), [before[0], existing]);
+  assert.deepEqual(app.tab().names(), ["Identical", "Existing project"]);
+  assert.equal(tab.elements["#project-name"].value, "Keep my draft");
+  assert.equal(tab.elements["#project-status"].value, "In progress");
+  assert.equal(tab.elements["#next-action"].value, "Keep typing");
+  assert.match(tab.elements["#success-message"].textContent, /Project deleted/);
+});
+
+test("deletion rereads after confirmation, preserving a new project from another tab", () => {
+  const app = browser();
+  const a = app.tab();
+  const b = app.tab();
+  b.confirmation.onConfirm = () => {
+    a.draft("Added during confirmation");
+    a.submit();
+  };
+  b.remove();
+  assert.deepEqual(JSON.parse(app.state.saved).map(project => project.name), ["Added during confirmation"]);
+  a.draft("Draft in other tab");
+  a.storageEvent();
+  assert.deepEqual(a.names(), ["Added during confirmation"]);
+  assert.equal(a.elements["#project-name"].value, "Draft in other tab");
+});
+
+test("a stale add does not resurrect a deleted project", () => {
+  const app = browser();
+  const a = app.tab();
+  const b = app.tab();
+  a.remove();
+  assert.deepEqual(a.names(), []);
+  assert.equal(a.elements["#empty-state"].hidden, false);
+  assert.deepEqual(app.tab().names(), []);
+  b.draft("New project");
+  b.submit();
+  assert.deepEqual(JSON.parse(app.state.saved).map(project => project.name), ["New project"]);
+});
+
+test("deleting a project already removed in another tab does not delete its former neighbor", () => {
+  const neighbor = { ...existing, id: "neighbor" };
+  const app = browser([existing, neighbor]);
+  const a = app.tab();
+  const b = app.tab();
+  a.remove();
+  const saved = app.state.saved;
+  const writes = app.state.writes;
+  b.remove();
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, writes);
+  assert.deepEqual(JSON.parse(app.state.saved), [neighbor]);
+  assert.deepEqual(b.names(), ["Existing project"]);
+  assert.match(b.elements["#success-message"].textContent, /no longer available/);
+});
+
+test("deletion read/write failures leave the project and draft intact with a visible error", () => {
+  for (const failure of ["read", "write", "invalid JSON", "duplicate IDs"]) {
+    const app = browser();
+    const tab = app.tab();
+    tab.draft("Keep my draft");
+    if (failure === "read") app.state.failRead = true;
+    if (failure === "write") app.state.failWrite = true;
+    if (failure === "invalid JSON") app.state.saved = "broken JSON";
+    if (failure === "duplicate IDs") app.state.saved = JSON.stringify([existing, existing]);
+    const saved = app.state.saved;
+    tab.remove();
+    assert.equal(app.state.saved, saved);
+    assert.equal(app.state.writes, 0);
+    assert.deepEqual(tab.names(), ["Existing project"]);
+    assert.equal(tab.elements["#project-name"].value, "Keep my draft");
+    assert.match(tab.elements["#error-message"].textContent, /Couldn’t delete/);
+    assert.equal(tab.elements["#success-message"].textContent, "");
+    app.state.failRead = false;
+    app.state.failWrite = false;
+    app.state.saved = JSON.stringify([existing]);
+    tab.remove();
+    assert.deepEqual(JSON.parse(app.state.saved), []);
+    assert.equal(tab.elements["#error-message"].textContent, "");
+  }
 });
