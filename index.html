@@ -70,6 +70,16 @@
         <p id="empty-state" class="empty-state">No projects yet. Add your first project above.</p>
         <ul id="project-list" class="project-list" role="list"></ul>
       </section>
+      <section class="projects-section" aria-labelledby="suggestions-heading">
+        <div class="section-heading">
+          <h2 id="suggestions-heading">Project suggestions</h2>
+          <button id="load-suggestions" type="button" class="secondary-button">Load suggestions</button>
+          <p>Sample ideas to read; these are not added to your saved projects.</p>
+        </div>
+        <ul id="suggestions-list" class="project-list" role="list"></ul>
+        <p id="suggestions-message" class="feedback" role="status"></p>
+        <p id="suggestions-error" class="feedback error" role="alert"></p>
+      </section>
       <noscript><p>Build Log needs JavaScript to add and save projects. Enable it in your browser, then refresh.</p></noscript>
     </main>
   </body>

@@ -118,6 +118,11 @@ button:hover {
   background: #1c493b;
 }
 
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 input:focus-visible,
 select:focus-visible,
 button:focus-visible {
