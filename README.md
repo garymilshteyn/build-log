@@ -19,6 +19,7 @@ No account required. Projects are saved only in the browser you use; they do not
 - Keep the form entry and show a message if saving fails.
 - Delete an individual project after confirmation, including when projects have identical names.
 - Edit a project's name, status, and next action, with Save changes and Cancel.
+- Export saved projects as a readable JSON backup.
 
 ## Run locally
 
@@ -52,6 +53,14 @@ Saving successfully or choosing Cancel returns to Add mode and restores all thre
 
 Edits target the existing stable ID, so identical names are safe. Blank or whitespace-only names are rejected. If saving fails, the form stays in Edit mode with an error and your draft intact. If another tab deleted the project, Save changes reports that it is unavailable and does not recreate it; copy anything you need before choosing Cancel. Drafts are not saved across page refreshes.
 
+## Exporting projects
+
+Click **Export projects** beside Your projects to download `build-log-projects-YYYY-MM-DD.json`, using your device’s local date. The file contains the latest saved list, formatted with two-space indentation, including each project’s ID, name, status, and next action. Additional stored fields are preserved too. An empty list exports as `[]`.
+
+Export does not save or clear unfinished Add/Edit drafts, switch form modes, or change stored projects. If storage is blocked or invalid, an error appears and no backup downloads. Export will also refuse older records that still lack IDs; let the app complete its normal ID migration before exporting. If migration failed, fix the storage problem and reload after copying any drafts you need to keep.
+
+**Importing backups is not implemented yet.** Keep the JSON file as a copy of your saved data; it cannot currently be restored through the app. The download is a snapshot, so later changes in another tab are not included.
+
 ## Automated tests
 
 The [Automated tests workflow](.github/workflows/tests.yml) runs the existing regression tests on pull requests targeting `main` and pushes to `main`. It uses Node.js 24 LTS on Ubuntu with read-only repository permissions and reports any test failures in GitHub Actions.
@@ -62,12 +71,13 @@ To run the same check locally, use a supported Node.js LTS version (Node.js 24 t
 node --test tests/app.test.cjs
 ```
 
-No packages are required. These checks run the application with a minimal mock DOM, confirmation dialog, and shared mock storage: ID migration, cancellation, editing and deletion by ID, edit validation, stale-tab additions/edits/deletions, storage-event updates, draft preservation, and storage failures. They do not test real browser dialogs, event delivery, or layout. Node.js is only needed for these checks, not to run the app.
+No packages are required. These checks run the application with a minimal mock DOM, confirmation dialog, download APIs, and shared mock storage: ID migration, cancellation, editing and deletion by ID, edit validation, stale-tab additions/edits/deletions, storage-event updates, draft preservation, storage failures, JSON export, and temporary download cleanup. They do not test real browser dialogs, downloads, event delivery, or layout. Node.js is only needed for these checks, not to run the app.
 
 ## Manual checks
 
 These are checks to perform in a browser, not a record of completed verification.
 
+- Click Export projects and inspect the downloaded filename and JSON. Check the local date, all saved fields, and an empty-list export. Repeat while an Add or Edit draft is unfinished; its fields and mode should stay intact. Check keyboard activation and that your browser starts the download successfully.
 - Open two tabs at the same URL. Add "Tab A test" in tab A, then add "Tab B test" in tab B without refreshing it. Refresh both tabs; both additions and any existing projects should remain. Also check that a draft in one tab stays intact when the other tab adds a project.
 - Add two projects with the same name. Click Delete on one and choose Cancel; nothing should change. Repeat and confirm; only that project should disappear, including after refresh. Use Tab and Enter to check the Delete button and confirmation dialog with the keyboard.
 - Delete in one tab and check that the other tab updates without losing its draft. Add from the other tab afterward; the deleted project should not return.
