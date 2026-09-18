@@ -102,12 +102,12 @@ form.addEventListener("submit", (event) => {
   };
 
   try {
-    // Retry a failed read before writing so unreadable saved data is preserved.
-    if (!storageLoaded) {
-      projects = readProjects();
-      storageLoaded = true;
-      renderProjects();
-    }
+    // Read on every submission, even if another tab's storage event is still pending.
+    // This read/write pair is not atomic; simultaneous writes can still conflict.
+    storageLoaded = false;
+    projects = readProjects();
+    storageLoaded = true;
+    renderProjects();
     const updatedProjects = [...projects, project];
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedProjects));
     projects = updatedProjects;
@@ -123,6 +123,20 @@ form.addEventListener("submit", (event) => {
   errorMessage.textContent = "";
   successMessage.textContent = "Project added and saved in this browser.";
   nameInput.focus();
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key !== STORAGE_KEY && event.key !== null) return;
+
+  try {
+    if (event.storageArea !== localStorage) return;
+    // Read current storage rather than a potentially outdated event payload.
+    projects = readProjects();
+    storageLoaded = true;
+    renderProjects();
+  } catch {
+    errorMessage.textContent = "Saved projects couldn’t be refreshed. The displayed list may be out of date. Your form entry has not been changed.";
+  }
 });
 
 try {

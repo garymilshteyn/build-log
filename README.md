@@ -25,6 +25,8 @@ Prerequisite: Python 3. No packages or build step are needed.
 
 This server only serves the static files; there is no application backend. Use the same browser and URL (including port) to return to your saved projects. Projects stay on this browser only; clearing its site data removes them. Opening `index.html` directly is not recommended because localStorage behavior for file URLs varies by browser.
 
+Each addition rereads the latest stored projects, and other open tabs update their lists when storage changes without clearing their forms. This preserves sequential additions from stale tabs. Truly simultaneous additions can still overwrite each other because the localStorage read and write are not one atomic operation.
+
 ## Files
 
 - `index.html`: Page structure, labeled project form, and project list.
@@ -33,6 +35,7 @@ This server only serves the static files; there is no application backend. Use t
 
 ## Manual checks
 
+- Open two tabs at the same URL. Add "Tab A test" in tab A, then add "Tab B test" in tab B without refreshing it. Refresh both tabs; both additions and any existing projects should remain. Also check that a draft in one tab stays intact when the other tab adds a project.
 - Add projects using each status, with and without a next action; refresh and confirm they remain.
 - Try an empty name and a spaces-only name; neither should add a project.
 - Enter `<img src=x onerror=alert(1)>` in the name and next action; it should appear literally, including after refresh.
@@ -47,6 +50,16 @@ This server only serves the static files; there is no application backend. Use t
   ```
 
   Try adding a project. An error should appear, the form should keep your entry, and the list should remain unchanged. Refresh to restore normal storage behavior, then confirm adding works again. This simulation does not delete saved projects.
+
+## Regression checks
+
+With Node.js 18 or newer available, run from the repository folder:
+
+```sh
+node --test tests/app.test.cjs
+```
+
+No packages are required. These checks run the application with a minimal mock DOM and shared mock storage: stale-tab additions, storage-event updates, draft preservation, and storage failures. They do not test real browser event delivery or layout. Node.js is only needed for these checks, not to run the app.
 
 ## Later
 - GitHub and live-demo links.
