@@ -18,13 +18,16 @@ const successMessage = document.querySelector("#success-message");
 const formHeading = document.querySelector("#form-heading");
 const submitButton = document.querySelector("#submit-project");
 const cancelEditButton = document.querySelector("#cancel-edit");
+const exportButton = document.querySelector("#export-projects");
+const exportError = document.querySelector("#export-error");
+const exportMessage = document.querySelector("#export-message");
 
 let projects = [];
 let storageLoaded = false;
 let editingId = null;
 let addDraft = null;
 
-function readProjects() {
+function readProjects({ migrateIds = true } = {}) {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === null) return [];
 
@@ -53,6 +56,7 @@ function readProjects() {
   // Persist IDs before rendering so refreshed and stale tabs identify the same records.
   // Keep every existing field, including fields this version does not use.
   if (savedProjects.some((project) => project.id === undefined)) {
+    if (!migrateIds) throw new Error("Saved projects need ID migration before export.");
     const migratedProjects = savedProjects.map((project) =>
       project.id === undefined ? { ...project, id: createProjectId(ids) } : project
     );
@@ -62,6 +66,43 @@ function readProjects() {
 
   return savedProjects;
 }
+
+function exportProjects() {
+  exportError.textContent = "";
+  exportMessage.textContent = "";
+  let savedProjects;
+  try {
+    // Export must never write to storage, even when legacy records need IDs.
+    savedProjects = readProjects({ migrateIds: false });
+  } catch {
+    exportError.textContent = "Couldn’t read saved projects for export. Storage may be blocked, the data may be invalid, or older projects may still need IDs. Check site storage and reload to retry; copy any drafts before reloading. No backup was downloaded.";
+    return;
+  }
+
+  let objectUrl;
+  let link;
+  try {
+    const now = new Date();
+    const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
+    const backup = new Blob([JSON.stringify(savedProjects, null, 2)], { type: "application/json" });
+    objectUrl = URL.createObjectURL(backup);
+    link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = `build-log-projects-${date}.json`;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    exportMessage.textContent = "Download requested. The backup includes saved projects only.";
+  } catch {
+    exportError.textContent = "Couldn’t start the export download. Check your browser’s download settings and try again. Your saved projects and drafts have not been changed.";
+  } finally {
+    if (link) link.remove();
+    // Give the browser time to start the download before releasing its URL.
+    if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+}
+
+exportButton.addEventListener("click", exportProjects);
 
 function createProjectId(ids) {
   let id;

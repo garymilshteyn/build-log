@@ -43,7 +43,13 @@ function browser(initialProjects = [existing]) {
     const elements = {};
     const listeners = {};
     const confirmation = { answer: true, messages: [], onConfirm() {} };
+    const downloads = [];
+    const urls = new Map();
+    const revoked = [];
+    const timers = [];
+    const downloadFailures = { createUrl: false, click: false };
     const document = {
+      body: element(),
       querySelector(selector) {
         if (!elements[selector]) {
           elements[selector] = element();
@@ -53,7 +59,16 @@ function browser(initialProjects = [existing]) {
         control.focus = () => { document.activeElement = control; };
         return control;
       },
-      createElement: element,
+      createElement(tag) {
+        const node = element();
+        node.remove = () => { document.body.children = document.body.children.filter(child => child !== node); };
+        if (tag === "a") node.click = () => {
+          assert.ok(document.body.children.includes(node));
+          if (downloadFailures.click) throw new Error("Download blocked");
+          downloads.push({ filename: node.download, blob: urls.get(node.href), url: node.href });
+        };
+        return node;
+      },
       createTextNode(text) { return { textContent: text }; },
     };
     const window = {
@@ -64,7 +79,22 @@ function browser(initialProjects = [existing]) {
         return confirmation.answer;
       },
     };
-    vm.runInNewContext(source, { document, window, localStorage: storage, crypto: { randomUUID } });
+    const URL = {
+      createObjectURL(blob) {
+        if (downloadFailures.createUrl) throw new Error("URL unavailable");
+        const url = `blob:test-${urls.size}`;
+        urls.set(url, blob);
+        return url;
+      },
+      revokeObjectURL(url) { revoked.push(url); },
+    };
+    class ExportDate extends Date {
+      constructor() { super(2026, 0, 2, 23, 30); }
+    }
+    vm.runInNewContext(source, {
+      document, window, localStorage: storage, crypto: { randomUUID }, Blob, URL, Date: ExportDate,
+      setTimeout(callback, delay) { timers.push({ callback, delay }); },
+    });
     const name = elements["#project-name"];
     const status = elements["#project-status"];
     const nextAction = elements["#next-action"];
@@ -72,6 +102,10 @@ function browser(initialProjects = [existing]) {
     form.reset = () => { name.value = ""; status.value = "Planned"; nextAction.value = ""; };
     return {
       elements,
+      downloads, urls, revoked, downloadFailures,
+      exportProjects() { elements["#export-projects"].listeners.click(); },
+      flushDownloadCleanup() { timers.splice(0).forEach(timer => timer.callback()); },
+      temporaryLinks() { return document.body.children.length; },
       activeElement() { return document.activeElement; },
       confirmation,
       deleteButton(index = 0) { return elements["#project-list"].children[index].children[0].children[2]; },
@@ -107,6 +141,132 @@ function browser(initialProjects = [existing]) {
   }
   return { state, tab };
 }
+
+test("export downloads readable JSON with a local-date filename and releases its URL", async () => {
+  const records = [existing, { id: "other", name: "Résumé <b>text</b>", status: "Planned", nextAction: "", extra: { keep: true } }];
+  const app = browser(records);
+  const tab = app.tab();
+  const saved = app.state.saved;
+  tab.exportProjects();
+  assert.equal(tab.downloads.length, 1);
+  const download = tab.downloads[0];
+  assert.equal(download.filename, "build-log-projects-2026-01-02.json");
+  assert.equal(download.blob.type, "application/json");
+  assert.equal(await download.blob.text(), JSON.stringify(records, null, 2));
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 0);
+  assert.equal(tab.temporaryLinks(), 0);
+  assert.equal(tab.revoked.length, 0);
+  tab.flushDownloadCleanup();
+  assert.deepEqual(tab.revoked, [download.url]);
+});
+
+test("export reads current storage rather than a stale tab's displayed projects", async () => {
+  const app = browser();
+  const a = app.tab();
+  const b = app.tab();
+  a.draft("Other tab addition");
+  a.submit();
+  a.edit(0);
+  a.editDraft("Latest name", "Planned", "Latest action");
+  a.saveEdit();
+  const saved = app.state.saved;
+  const writes = app.state.writes;
+  b.exportProjects();
+  assert.deepEqual(JSON.parse(await b.downloads[0].blob.text()), JSON.parse(saved));
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, writes);
+  a.remove(0);
+  b.exportProjects();
+  assert.deepEqual(JSON.parse(await b.downloads[1].blob.text()), JSON.parse(app.state.saved));
+  b.flushDownloadCleanup();
+  assert.equal(b.revoked.length, 2);
+});
+
+test("export of an empty or missing saved list is exactly []", async () => {
+  for (const value of ["[]", null]) {
+    const app = browser();
+    const tab = app.tab();
+    app.state.saved = value;
+    tab.exportProjects();
+    assert.equal(await tab.downloads[0].blob.text(), "[]");
+    assert.equal(app.state.saved, value);
+    assert.equal(app.state.writes, 0);
+    tab.flushDownloadCleanup();
+  }
+});
+
+test("export preserves Add and Edit drafts, suspended Add fields, mode, and save errors", async () => {
+  const app = browser();
+  const tab = app.tab();
+  tab.draft("  Add draft  ");
+  tab.elements["#error-message"].textContent = "Previous save error";
+  tab.exportProjects();
+  assert.equal(tab.elements["#project-name"].value, "  Add draft  ");
+  assert.equal(tab.elements["#form-heading"].textContent, "Add project");
+  assert.equal(tab.elements["#error-message"].textContent, "Previous save error");
+  tab.edit();
+  tab.editDraft("Unsaved edit", "Planned", "Unsaved action");
+  app.state.failWrite = true; // Export must work even when writes are blocked.
+  tab.exportProjects();
+  assert.deepEqual(JSON.parse(await tab.downloads[1].blob.text()), [existing]);
+  assert.equal(tab.elements["#project-name"].value, "Unsaved edit");
+  assert.equal(tab.elements["#project-status"].value, "Planned");
+  assert.equal(tab.elements["#next-action"].value, "Unsaved action");
+  assert.equal(tab.elements["#form-heading"].textContent, "Edit project");
+  tab.cancelEdit();
+  assert.equal(tab.elements["#project-name"].value, "  Add draft  ");
+  assert.equal(tab.elements["#project-status"].value, "In progress");
+  assert.equal(tab.elements["#next-action"].value, "Keep typing");
+  assert.equal(app.state.writes, 0);
+  tab.flushDownloadCleanup();
+});
+
+test("unreadable or invalid data prevents export without changing storage or drafts", () => {
+  for (const value of ["blocked", "bad JSON", "{}", "null", "[null]",
+    JSON.stringify([{ ...existing, name: " " }]),
+    JSON.stringify([{ ...existing, status: "invalid" }]),
+    JSON.stringify([{ ...existing, nextAction: null }]),
+    JSON.stringify([{ ...existing, id: "" }]),
+    JSON.stringify([existing, existing]),
+    JSON.stringify([{ name: "Legacy", status: "Done", nextAction: "Keep me" }])]) {
+    const app = browser();
+    const tab = app.tab();
+    tab.draft("Keep draft");
+    if (value === "blocked") app.state.failRead = true;
+    else app.state.saved = value;
+    const saved = app.state.saved;
+    tab.exportProjects();
+    assert.equal(tab.downloads.length, 0);
+    assert.equal(tab.urls.size, 0);
+    assert.equal(app.state.writes, 0);
+    assert.equal(app.state.saved, saved);
+    assert.equal(tab.elements["#project-name"].value, "Keep draft");
+    assert.match(tab.elements["#export-error"].textContent, /Couldn’t read saved projects/);
+    assert.equal(tab.elements["#export-message"].textContent, "");
+    app.state.failRead = false;
+    app.state.saved = JSON.stringify([existing]);
+    tab.exportProjects();
+    assert.equal(tab.downloads.length, 1);
+    assert.equal(tab.elements["#export-error"].textContent, "");
+    tab.flushDownloadCleanup();
+  }
+});
+
+test("download setup failures show an error and release any created URL", () => {
+  for (const failure of ["createUrl", "click"]) {
+    const app = browser();
+    const tab = app.tab();
+    tab.downloadFailures[failure] = true;
+    tab.exportProjects();
+    assert.equal(tab.downloads.length, 0);
+    assert.equal(tab.temporaryLinks(), 0);
+    assert.equal(app.state.writes, 0);
+    assert.match(tab.elements["#export-error"].textContent, /Couldn’t start the export download/);
+    tab.flushDownloadCleanup();
+    assert.equal(tab.revoked.length, failure === "click" ? 1 : 0);
+  }
+});
 
 test("stale tab preserves existing projects and both sequential additions without receiving an event", () => {
   const app = browser();
