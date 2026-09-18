@@ -215,6 +215,21 @@ button:focus-visible {
   color: #58635d;
 }
 
+.form-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.secondary-button {
+  color: #265e4d;
+  border-color: #dce2d9;
+  background: #fff;
+}
+
+.secondary-button:hover {
+  background: #e6f3eb;
+}
+
 .delete-button {
   color: #a52d25;
   border-color: #dce2d9;
