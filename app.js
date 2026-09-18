@@ -15,9 +15,14 @@ const projectList = document.querySelector("#project-list");
 const emptyState = document.querySelector("#empty-state");
 const errorMessage = document.querySelector("#error-message");
 const successMessage = document.querySelector("#success-message");
+const formHeading = document.querySelector("#form-heading");
+const submitButton = document.querySelector("#submit-project");
+const cancelEditButton = document.querySelector("#cancel-edit");
 
 let projects = [];
 let storageLoaded = false;
+let editingId = null;
+let addDraft = null;
 
 function readProjects() {
   const stored = localStorage.getItem(STORAGE_KEY);
@@ -96,6 +101,14 @@ function renderProjects() {
     deleteButton.setAttribute("aria-label", `Delete project: ${project.name}`);
     deleteButton.addEventListener("click", () => deleteProject(project));
     header.append(deleteButton);
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "secondary-button";
+    editButton.textContent = "Edit";
+    editButton.setAttribute("aria-label", `Edit project: ${project.name}`);
+    editButton.addEventListener("click", () => startEditing(project));
+    header.append(editButton);
     item.append(header);
 
     if (project.nextAction) {
@@ -109,6 +122,76 @@ function renderProjects() {
 
     projectList.append(item);
   }
+}
+
+function startEditing(project) {
+  if (editingId !== null) {
+    errorMessage.textContent = "Save or cancel your current edit before starting another one.";
+    nameInput.focus();
+    return;
+  }
+  // Keep raw input, including whitespace, until the user submits the Add draft.
+  addDraft = { name: nameInput.value, status: statusInput.value, nextAction: nextActionInput.value };
+  editingId = project.id;
+  nameInput.value = project.name;
+  statusInput.value = project.status;
+  nextActionInput.value = project.nextAction;
+  nameInput.setCustomValidity("");
+  errorMessage.textContent = "";
+  successMessage.textContent = "";
+  updateFormMode();
+  nameInput.focus();
+}
+
+function updateFormMode() {
+  const isEditing = editingId !== null;
+  formHeading.textContent = isEditing ? "Edit project" : "Add project";
+  submitButton.textContent = isEditing ? "Save changes" : "Add project";
+  cancelEditButton.hidden = !isEditing;
+}
+
+function closeEditor() {
+  if (editingId === null) return;
+  editingId = null;
+  nameInput.value = addDraft.name;
+  statusInput.value = addDraft.status;
+  nextActionInput.value = addDraft.nextAction;
+  addDraft = null;
+  nameInput.setCustomValidity("");
+  errorMessage.textContent = "";
+  successMessage.textContent = "";
+  updateFormMode();
+  nameInput.focus();
+}
+
+cancelEditButton.addEventListener("click", closeEditor);
+
+function saveEdits(changes) {
+  try {
+    // Apply only this edit to the latest list, preserving other tabs' changes.
+    // As with additions and deletions, this read/write pair is not atomic.
+    const latestProjects = readProjects();
+    if (!latestProjects.some((project) => project.id === editingId)) {
+      projects = latestProjects;
+      storageLoaded = true;
+      renderProjects();
+      errorMessage.textContent = "This project was deleted or is no longer available. Your changes were not saved. Copy your draft if needed, then choose Cancel.";
+      return;
+    }
+    const updatedProjects = latestProjects.map((project) => project.id === editingId
+      ? { ...project, ...changes }
+      : project);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedProjects));
+    projects = updatedProjects;
+    storageLoaded = true;
+  } catch {
+    errorMessage.textContent = "Couldn’t save your changes. Browser storage may be blocked, full, or contain invalid data. Your edit draft is still here; check site storage and try again.";
+    return;
+  }
+
+  renderProjects();
+  closeEditor();
+  successMessage.textContent = "Project updated and saved in this browser.";
 }
 
 function deleteProject(project) {
@@ -162,6 +245,11 @@ form.addEventListener("submit", (event) => {
     nextAction: nextActionInput.value.trim(),
   };
 
+  if (editingId !== null) {
+    saveEdits(project);
+    return;
+  }
+
   try {
     // Read on every submission, even if another tab's storage event is still pending.
     // This read/write pair is not atomic; simultaneous writes can still conflict.
@@ -200,6 +288,8 @@ window.addEventListener("storage", (event) => {
     errorMessage.textContent = "Saved projects couldn’t be refreshed. The displayed list may be out of date. Your form entry has not been changed.";
   }
 });
+
+updateFormMode();
 
 try {
   projects = readProjects();

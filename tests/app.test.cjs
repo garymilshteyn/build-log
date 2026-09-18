@@ -17,7 +17,9 @@ function element() {
     replaceChildren(...children) { this.children = children; },
     addEventListener(type, callback) { this.listeners[type] = callback; },
     setAttribute(name, value) { this[name] = value; },
-    setCustomValidity() {}, reportValidity() {}, focus() {},
+    setCustomValidity(message) { this.validationMessage = message; },
+    reportValidity() { this.validityReported = true; },
+    focus() {},
   };
 }
 
@@ -42,7 +44,15 @@ function browser(initialProjects = [existing]) {
     const listeners = {};
     const confirmation = { answer: true, messages: [], onConfirm() {} };
     const document = {
-      querySelector(selector) { return elements[selector] ??= element(); },
+      querySelector(selector) {
+        if (!elements[selector]) {
+          elements[selector] = element();
+          if (selector === "#project-status") elements[selector].value = "Planned";
+        }
+        const control = elements[selector];
+        control.focus = () => { document.activeElement = control; };
+        return control;
+      },
       createElement: element,
       createTextNode(text) { return { textContent: text }; },
     };
@@ -62,9 +72,24 @@ function browser(initialProjects = [existing]) {
     form.reset = () => { name.value = ""; status.value = "Planned"; nextAction.value = ""; };
     return {
       elements,
+      activeElement() { return document.activeElement; },
       confirmation,
       deleteButton(index = 0) { return elements["#project-list"].children[index].children[0].children[2]; },
       remove(index = 0) { this.deleteButton(index).listeners.click(); },
+      edit(index = 0) {
+        const button = elements["#project-list"].children[index].children[0].children.find(child => child.textContent === "Edit");
+        assert.equal(button.type, "button");
+        assert.match(button["aria-label"], /^Edit project: /);
+        button.listeners.click();
+      },
+      editDraft(name, status = "In progress", nextAction = "Edited next step") {
+        elements["#project-name"].value = name;
+        elements["#project-name"].listeners.input();
+        elements["#project-status"].value = status;
+        elements["#next-action"].value = nextAction;
+      },
+      saveEdit() { elements["#project-form"].listeners.submit({ preventDefault() {} }); },
+      cancelEdit() { elements["#cancel-edit"].listeners.click(); },
       draft(projectName) {
         name.value = projectName;
         status.value = "In progress";
@@ -324,4 +349,270 @@ test("deletion read/write failures leave the project and draft intact with a vis
     assert.deepEqual(JSON.parse(app.state.saved), []);
     assert.equal(tab.elements["#error-message"].textContent, "");
   }
+});
+
+test("editing prefills all fields, preserves ID and extra fields, and persists after reload", () => {
+  const original = { ...existing, extra: { keep: true } };
+  const app = browser([original]);
+  const tab = app.tab();
+  tab.draft("Unfinished addition");
+  tab.edit();
+  assert.equal(tab.elements["#cancel-edit"].hidden, false);
+  assert.equal(tab.elements["#project-name"].value, existing.name);
+  assert.equal(tab.elements["#project-status"].value, existing.status);
+  assert.equal(tab.elements["#next-action"].value, existing.nextAction);
+  for (const status of ["Planned", "In progress", "Done"]) {
+    tab.editDraft("  <b>Updated name</b>  ", status, "  <script>literal text</script>  ");
+    tab.saveEdit();
+    assert.deepEqual(JSON.parse(app.state.saved), [{
+      ...original, name: "<b>Updated name</b>", status, nextAction: "<script>literal text</script>",
+    }]);
+    assert.deepEqual(tab.names(), ["<b>Updated name</b>"]);
+    assert.deepEqual(app.tab().names(), tab.names());
+    assert.equal(tab.elements["#cancel-edit"].hidden, true);
+    assert.equal(tab.elements["#project-name"].value, "Unfinished addition");
+    tab.edit();
+  }
+  tab.editDraft("No next step", "Planned", "   ");
+  tab.saveEdit();
+  assert.equal(JSON.parse(app.state.saved)[0].nextAction, "");
+});
+
+test("canceling an edit does not read or write storage and preserves the add draft", () => {
+  const app = browser();
+  const tab = app.tab();
+  tab.draft("Unfinished addition");
+  tab.edit();
+  tab.editDraft("Unsaved edit");
+  const saved = app.state.saved;
+  app.state.failRead = true;
+  app.state.failWrite = true;
+  tab.cancelEdit();
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 0);
+  assert.deepEqual(tab.names(), [existing.name]);
+  assert.equal(tab.elements["#cancel-edit"].hidden, true);
+  assert.equal(tab.elements["#error-message"].textContent, "");
+  assert.equal(tab.elements["#project-name"].value, "Unfinished addition");
+  tab.edit();
+  assert.equal(tab.elements["#project-name"].value, existing.name);
+});
+
+test("editing one of two identically named projects changes only the selected stable ID", () => {
+  const duplicate = { ...existing, id: "duplicate" };
+  const app = browser([existing, duplicate]);
+  const tab = app.tab();
+  tab.edit(1);
+  // Simulate a reordered latest list without delivering a storage event.
+  app.state.saved = JSON.stringify([duplicate, existing]);
+  tab.editDraft("Selected project");
+  tab.saveEdit();
+  assert.deepEqual(JSON.parse(app.state.saved), [
+    { ...duplicate, name: "Selected project", status: "In progress", nextAction: "Edited next step" }, existing,
+  ]);
+});
+
+test("edit validation rejects blank names and invalid statuses, then allows correction", () => {
+  const app = browser();
+  const tab = app.tab();
+  const saved = app.state.saved;
+  tab.edit();
+  for (const name of ["", "   ", "\t\n", "\u00a0"]) {
+    tab.editDraft(name);
+    tab.saveEdit();
+    assert.equal(app.state.saved, saved);
+    assert.equal(app.state.writes, 0);
+    assert.equal(tab.elements["#project-name"].value, name);
+    assert.match(tab.elements["#project-name"].validationMessage, /project name/);
+    assert.equal(tab.elements["#project-name"].validityReported, true);
+  }
+  tab.editDraft("Valid", "Unknown");
+  tab.saveEdit();
+  assert.equal(app.state.writes, 0);
+  assert.match(tab.elements["#error-message"].textContent, /status/);
+  tab.editDraft("Corrected");
+  assert.equal(tab.elements["#project-name"].validationMessage, "");
+  tab.saveEdit();
+  assert.equal(JSON.parse(app.state.saved)[0].name, "Corrected");
+});
+
+test("a stale edit preserves another tab's unrelated edit, addition, and deletion", () => {
+  const other = { ...existing, id: "other", name: "Other" };
+  const removed = { ...existing, id: "removed", name: "Remove me" };
+  const app = browser([existing, other, removed]);
+  const a = app.tab();
+  const b = app.tab();
+  b.edit();
+  b.editDraft("B edit");
+  a.edit(1);
+  a.editDraft("A edit", "Planned", "A next action");
+  a.saveEdit();
+  a.remove(2);
+  a.draft("A addition");
+  a.submit();
+  const latest = JSON.parse(app.state.saved);
+  b.saveEdit();
+  const saved = JSON.parse(app.state.saved);
+  assert.equal(saved[0].name, "B edit");
+  assert.deepEqual(saved.slice(1), latest.slice(1));
+  a.storageEvent();
+  assert.deepEqual(a.names(), ["B edit", "A edit", "A addition"]);
+});
+
+test("storage events and attempts to start another edit do not replace an edit draft", () => {
+  const app = browser([existing, { ...existing, id: "other" }]);
+  const a = app.tab();
+  const b = app.tab();
+  b.edit();
+  b.editDraft("Keep my edit", "Planned", "Keep my next action");
+  a.draft("Added elsewhere");
+  a.submit();
+  b.storageEvent();
+  b.edit(1);
+  assert.equal(b.elements["#project-name"].value, "Keep my edit");
+  assert.equal(b.elements["#project-status"].value, "Planned");
+  assert.equal(b.elements["#next-action"].value, "Keep my next action");
+  assert.match(b.elements["#error-message"].textContent, /Save or cancel/);
+  b.saveEdit();
+  assert.equal(JSON.parse(app.state.saved)[0].name, "Keep my edit");
+});
+
+test("saving after another tab deletes the project never recreates it, with or without an event", () => {
+  for (const deliverEvent of [false, true]) {
+    const app = browser();
+    const a = app.tab();
+    const b = app.tab();
+    b.edit();
+    b.editDraft("Do not recreate");
+    a.remove();
+    if (deliverEvent) b.storageEvent();
+    const writes = app.state.writes;
+    b.saveEdit();
+    assert.equal(app.state.writes, writes);
+    assert.deepEqual(JSON.parse(app.state.saved), []);
+    assert.deepEqual(b.names(), []);
+    assert.equal(b.elements["#project-name"].value, "Do not recreate");
+    assert.equal(b.elements["#cancel-edit"].hidden, false);
+    assert.match(b.elements["#error-message"].textContent, /deleted or is no longer available/);
+    b.cancelEdit();
+    assert.equal(b.elements["#cancel-edit"].hidden, true);
+  }
+});
+
+test("edit storage failures preserve the entire draft and saved list; retry updates without duplication", () => {
+  for (const failure of ["read", "write", "invalid JSON", "invalid data"]) {
+    const app = browser();
+    const tab = app.tab();
+    tab.edit();
+    tab.editDraft("Keep this name", "Planned", "Keep this action");
+    if (failure === "read") app.state.failRead = true;
+    if (failure === "write") app.state.failWrite = true;
+    if (failure === "invalid JSON") app.state.saved = "broken JSON";
+    if (failure === "invalid data") app.state.saved = JSON.stringify([existing, existing]);
+    const saved = app.state.saved;
+    tab.saveEdit();
+    assert.equal(app.state.saved, saved);
+    assert.equal(app.state.writes, 0);
+    assert.deepEqual(tab.names(), [existing.name]);
+    assert.equal(tab.elements["#project-name"].value, "Keep this name");
+    assert.equal(tab.elements["#project-status"].value, "Planned");
+    assert.equal(tab.elements["#next-action"].value, "Keep this action");
+    assert.equal(tab.elements["#cancel-edit"].hidden, false);
+    assert.match(tab.elements["#error-message"].textContent, /Couldn’t save your changes/);
+    app.state.failRead = false;
+    app.state.failWrite = false;
+    app.state.saved = JSON.stringify([existing]);
+    tab.saveEdit();
+    assert.deepEqual(JSON.parse(app.state.saved), [{ ...existing, name: "Keep this name", status: "Planned", nextAction: "Keep this action" }]);
+    assert.equal(tab.elements["#cancel-edit"].hidden, true);
+    assert.equal(tab.elements["#error-message"].textContent, "");
+  }
+});
+
+test("shared form changes modes and restores every Add field after save or cancel", () => {
+  for (const finish of ["save", "cancel"]) {
+    const app = browser();
+    const tab = app.tab();
+    const controls = tab.elements;
+    assert.equal(controls["#form-heading"].textContent, "Add project");
+    assert.equal(controls["#submit-project"].textContent, "Add project");
+    assert.equal(controls["#cancel-edit"].hidden, true);
+    assert.equal(controls["#project-status"].value, "Planned");
+    tab.draft("  Unfinished addition  ");
+    controls["#project-status"].value = "Done";
+    controls["#next-action"].value = "  Original next step  ";
+    tab.edit();
+    assert.equal(controls["#form-heading"].textContent, "Edit project");
+    assert.equal(controls["#submit-project"].textContent, "Save changes");
+    assert.equal(controls["#cancel-edit"].hidden, false);
+    assert.equal(tab.activeElement(), controls["#project-name"]);
+    tab.editDraft("Updated", "Planned", "Updated action");
+    app.state.failWrite = true;
+    tab.saveEdit();
+    assert.equal(controls["#form-heading"].textContent, "Edit project");
+    assert.equal(controls["#submit-project"].textContent, "Save changes");
+    assert.equal(controls["#project-name"].value, "Updated");
+    app.state.failWrite = false;
+    if (finish === "save") tab.saveEdit();
+    else tab.cancelEdit();
+    assert.equal(controls["#form-heading"].textContent, "Add project");
+    assert.equal(controls["#submit-project"].textContent, "Add project");
+    assert.equal(controls["#cancel-edit"].hidden, true);
+    assert.equal(controls["#error-message"].textContent, "");
+    assert.equal(controls["#project-name"].value, "  Unfinished addition  ");
+    assert.equal(controls["#project-status"].value, "Done");
+    assert.equal(controls["#next-action"].value, "  Original next step  ");
+    const edited = JSON.parse(app.state.saved)[0];
+    assert.equal(edited.name, finish === "save" ? "Updated" : existing.name);
+    assert.equal(app.state.writes, finish === "save" ? 1 : 0);
+    // Submitting the restored Add draft must create a new ID, not edit the old one.
+    tab.submit();
+    const saved = JSON.parse(app.state.saved);
+    assert.equal(saved.length, 2);
+    assert.deepEqual(saved[0], edited);
+    assert.notEqual(saved[1].id, existing.id);
+    assert.equal(saved[1].name, "Unfinished addition");
+    assert.equal(saved[1].status, "Done");
+    assert.equal(saved[1].nextAction, "Original next step");
+  }
+});
+
+test("validation state does not leak between Add and Edit modes", () => {
+  const app = browser();
+  const tab = app.tab();
+  tab.draft("   ");
+  tab.submit();
+  assert.ok(tab.elements["#project-name"].validationMessage);
+  tab.edit();
+  assert.equal(tab.elements["#project-name"].validationMessage, "");
+  tab.editDraft("\t");
+  tab.saveEdit();
+  assert.ok(tab.elements["#project-name"].validationMessage);
+  tab.cancelEdit();
+  assert.equal(tab.elements["#project-name"].validationMessage, "");
+  assert.equal(tab.elements["#project-name"].value, "   ");
+  tab.submit();
+  assert.equal(app.state.writes, 0);
+  assert.ok(tab.elements["#project-name"].validationMessage);
+});
+
+test("tab updates preserve both the active edit and the suspended Add draft", () => {
+  const app = browser();
+  const a = app.tab();
+  const b = app.tab();
+  b.draft("My Add draft");
+  b.edit();
+  b.editDraft("My edit", "Done", "Edit next action");
+  a.draft("Other tab addition");
+  a.submit();
+  b.storageEvent();
+  assert.equal(b.elements["#project-name"].value, "My edit");
+  assert.equal(b.elements["#project-status"].value, "Done");
+  assert.equal(b.elements["#next-action"].value, "Edit next action");
+  b.edit(1); // A second Edit click must not replace either draft.
+  b.cancelEdit();
+  assert.equal(b.elements["#project-name"].value, "My Add draft");
+  assert.equal(b.elements["#project-status"].value, "In progress");
+  assert.equal(b.elements["#next-action"].value, "Keep typing");
+  assert.deepEqual(b.names(), [existing.name, "Other tab addition"]);
 });

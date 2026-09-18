@@ -15,8 +15,8 @@
         <p>Keep your projects and their next steps in one place.</p>
       </header>
 
-      <section class="panel" aria-labelledby="add-heading">
-        <h2 id="add-heading">Add a project</h2>
+      <section class="panel" aria-labelledby="form-heading">
+        <h2 id="form-heading">Add project</h2>
         <form id="project-form">
           <div class="form-row">
             <div class="field">
@@ -38,7 +38,10 @@
             <input id="next-action" name="nextAction" type="text"
               placeholder="e.g. Sketch the home page">
           </div>
-          <button type="submit">Add project</button>
+          <div class="form-actions">
+            <button id="submit-project" type="submit">Add project</button>
+            <button id="cancel-edit" type="button" class="secondary-button" hidden>Cancel</button>
+          </div>
           <p id="error-message" class="feedback error" role="alert"></p>
           <p id="success-message" class="feedback success" role="status"></p>
         </form>
