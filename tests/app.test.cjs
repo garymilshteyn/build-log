@@ -16,6 +16,7 @@ function element() {
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
     addEventListener(type, callback) { this.listeners[type] = callback; },
+    click() { this.clicks = (this.clicks || 0) + 1; return this.listeners.click?.(); },
     setAttribute(name, value) { this[name] = value; },
     setCustomValidity(message) { this.validationMessage = message; },
     reportValidity() { this.validityReported = true; },
@@ -104,6 +105,15 @@ function browser(initialProjects = [existing]) {
       elements,
       downloads, urls, revoked, downloadFailures,
       exportProjects() { elements["#export-projects"].listeners.click(); },
+      openImport() { elements["#import-projects"].listeners.click(); },
+      chooseImport(contents) {
+        elements["#import-file"].files = contents === null ? [] : [
+          typeof contents === "string" ? { text: async () => contents } : contents,
+        ];
+        return elements["#import-file"].listeners.change();
+      },
+      confirmImport() { elements["#confirm-import"].listeners.click(); },
+      cancelImport() { elements["#cancel-import"].listeners.click(); },
       flushDownloadCleanup() { timers.splice(0).forEach(timer => timer.callback()); },
       temporaryLinks() { return document.body.children.length; },
       activeElement() { return document.activeElement; },
@@ -141,6 +151,223 @@ function browser(initialProjects = [existing]) {
   }
   return { state, tab };
 }
+
+test("import previews counts, requires confirmation, keeps existing IDs, and copies only supported fields", async () => {
+  const original = { ...existing, extra: { keep: true } };
+  const app = browser([original]);
+  const tab = app.tab();
+  const incoming = { id: "new-id", name: existing.name, status: "Planned", nextAction: "" };
+  const file = JSON.stringify([{ ...existing, name: "Must not overwrite" }, { ...incoming, extra: "Ignore", constructor: "Ignore" }]).replace('"extra":"Ignore"', '"extra":"Ignore","__proto__":{"polluted":true}');
+  const saved = app.state.saved;
+  await tab.chooseImport(file);
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 0);
+  assert.deepEqual(tab.names(), [existing.name]);
+  assert.equal(tab.elements["#import-preview"].hidden, false);
+  assert.match(tab.elements["#import-summary"].textContent, /1 new project\(s\).*1 existing ID/);
+  assert.match(tab.elements["#import-summary"].textContent, /kept unchanged, even if the file has different fields/);
+  tab.confirmImport();
+  assert.deepEqual(JSON.parse(app.state.saved), [original, incoming]);
+  assert.deepEqual(app.tab().names(), [existing.name, existing.name]);
+  assert.equal(tab.elements["#import-preview"].hidden, true);
+  assert.equal(app.state.writes, 1);
+});
+
+test("canceling the picker or preview does not change saved data or allow an unconfirmed import", async () => {
+  const app = browser();
+  const tab = app.tab();
+  const saved = app.state.saved;
+  tab.confirmImport();
+  tab.openImport();
+  assert.equal(tab.elements["#import-file"].clicks, 1);
+  await tab.chooseImport(null);
+  assert.equal(app.state.saved, saved);
+  await tab.chooseImport(JSON.stringify([{ ...existing, id: "new" }]));
+  const summary = tab.elements["#import-summary"].textContent;
+  tab.openImport();
+  await tab.chooseImport(null);
+  assert.equal(tab.elements["#import-summary"].textContent, summary);
+  assert.equal(tab.elements["#import-preview"].hidden, false);
+  app.state.failRead = true;
+  tab.cancelImport();
+  tab.confirmImport();
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 0);
+  assert.equal(tab.elements["#import-preview"].hidden, true);
+  assert.deepEqual(tab.names(), [existing.name]);
+});
+
+test("empty and repeated imports are idempotent and do not rewrite storage", async () => {
+  const app = browser();
+  const tab = app.tab();
+  const incoming = { ...existing, id: "new" };
+  await tab.chooseImport("[]");
+  assert.match(tab.elements["#import-summary"].textContent, /0 new project\(s\).*0 existing ID/);
+  tab.confirmImport();
+  assert.equal(app.state.writes, 0);
+  const file = JSON.stringify([incoming]);
+  await tab.chooseImport(file);
+  tab.confirmImport();
+  const saved = app.state.saved;
+  await tab.chooseImport(file);
+  assert.match(tab.elements["#import-summary"].textContent, /0 new project\(s\).*1 existing ID/);
+  tab.confirmImport();
+  assert.equal(app.state.saved, saved);
+  assert.equal(app.state.writes, 1);
+});
+
+test("the entire import is rejected for malformed JSON, invalid fields, missing IDs, or duplicate IDs", async () => {
+  const incoming = { ...existing, id: "new" };
+  const invalidRecords = [null, [], { ...incoming, id: undefined }, { ...incoming, id: " " },
+    { ...incoming, id: 7 }, { ...incoming, name: "\t " }, { ...incoming, name: 1 },
+    { ...incoming, status: "Unknown" }, { ...incoming, nextAction: null },
+    { ...incoming, nextAction: undefined }, { ...existing, nextAction: 1 }];
+  const invalidFiles = ["bad JSON", "null", "{}", '"text"',
+    JSON.stringify([incoming, incoming]),
+    ...invalidRecords.map(record => JSON.stringify([{ ...incoming, id: "valid-first" }, record]))];
+  for (const file of invalidFiles) {
+    const app = browser();
+    const tab = app.tab();
+    const saved = app.state.saved;
+    await tab.chooseImport(file);
+    assert.ok(tab.elements["#import-error"].textContent);
+    assert.equal(tab.elements["#import-preview"].hidden, true);
+    tab.confirmImport();
+    assert.equal(app.state.saved, saved);
+    assert.equal(app.state.writes, 0);
+    assert.deepEqual(tab.names(), [existing.name]);
+  }
+});
+
+test("storage errors during preview never write or enable confirmation", async () => {
+  for (const stored of ["blocked", "broken JSON", JSON.stringify([existing, existing]), JSON.stringify([{ name: "Legacy", status: "Done", nextAction: "" }])]) {
+    const app = browser();
+    const tab = app.tab();
+    if (stored === "blocked") app.state.failRead = true;
+    else app.state.saved = stored;
+    const saved = app.state.saved;
+    await tab.chooseImport(JSON.stringify([{ ...existing, id: "new" }]));
+    assert.match(tab.elements["#import-error"].textContent, /Couldn’t read existing projects/);
+    tab.confirmImport();
+    assert.equal(app.state.saved, saved);
+    assert.equal(app.state.writes, 0);
+  }
+});
+
+test("confirmation recomputes the merge and keeps newer records, additions, and unrelated deletions", async () => {
+  const removed = { ...existing, id: "remove-me", name: "Removed later" };
+  const app = browser([existing, removed]);
+  const tab = app.tab();
+  const other = app.tab();
+  const incoming = { ...existing, id: "incoming", name: "File version" };
+  const addition = { ...existing, id: "another-new", name: "New from file" };
+  await tab.chooseImport(JSON.stringify([existing, incoming, addition]));
+  assert.match(tab.elements["#import-summary"].textContent, /2 new project\(s\).*1 existing ID/);
+  const latest = [{ ...existing, name: "Updated elsewhere" }, { ...incoming, name: "Saved since preview" }, { ...existing, id: "unrelated", name: "Unrelated addition" }];
+  app.state.saved = JSON.stringify(latest);
+  tab.confirmImport();
+  assert.deepEqual(JSON.parse(app.state.saved), [...latest, addition]);
+  assert.match(tab.elements["#import-message"].textContent, /Imported 1 new project\(s\); skipped 2 existing ID/);
+  other.storageEvent();
+  assert.deepEqual(other.names(), tab.names());
+});
+
+test("confirmation failures keep the list, data, and preview intact and allow a retry", async () => {
+  for (const failure of ["read", "write", "invalid data"]) {
+    const app = browser();
+    const tab = app.tab();
+    const incoming = { ...existing, id: "new" };
+    await tab.chooseImport(JSON.stringify([incoming]));
+    if (failure === "read") app.state.failRead = true;
+    if (failure === "write") app.state.failWrite = true;
+    if (failure === "invalid data") app.state.saved = "{}";
+    const saved = app.state.saved;
+    tab.confirmImport();
+    assert.equal(app.state.saved, saved);
+    assert.equal(app.state.writes, 0);
+    assert.deepEqual(tab.names(), [existing.name]);
+    assert.equal(tab.elements["#import-preview"].hidden, false);
+    assert.match(tab.elements["#import-error"].textContent, /Couldn’t import projects/);
+    app.state.failRead = false;
+    app.state.failWrite = false;
+    app.state.saved = JSON.stringify([existing]);
+    tab.confirmImport();
+    assert.deepEqual(JSON.parse(app.state.saved), [existing, incoming]);
+    assert.equal(tab.elements["#import-error"].textContent, "");
+  }
+});
+
+test("import success, failure, and cancellation preserve Edit and suspended Add drafts", async () => {
+  for (const finish of ["confirm", "cancel", "fail"]) {
+    const app = browser();
+    const tab = app.tab();
+    tab.draft("  Add draft  ");
+    tab.edit();
+    tab.editDraft("  Edit draft  ", "Planned", "Edit action");
+    tab.elements["#error-message"].textContent = "Existing form error";
+    await tab.chooseImport(JSON.stringify([{ ...existing, id: "new" }]));
+    if (finish === "fail") app.state.failWrite = true;
+    if (finish === "cancel") tab.cancelImport();
+    else tab.confirmImport();
+    assert.equal(tab.elements["#project-name"].value, "  Edit draft  ");
+    assert.equal(tab.elements["#project-status"].value, "Planned");
+    assert.equal(tab.elements["#next-action"].value, "Edit action");
+    assert.equal(tab.elements["#form-heading"].textContent, "Edit project");
+    assert.equal(tab.elements["#error-message"].textContent, "Existing form error");
+    tab.cancelEdit();
+    assert.equal(tab.elements["#project-name"].value, "  Add draft  ");
+    assert.equal(tab.elements["#project-status"].value, "In progress");
+    assert.equal(tab.elements["#next-action"].value, "Keep typing");
+  }
+});
+
+test("file read failures and invalid replacement files cannot confirm an earlier preview", async () => {
+  const app = browser();
+  const tab = app.tab();
+  const valid = JSON.stringify([{ ...existing, id: "new" }]);
+  for (const replacement of ["bad JSON", { text: async () => { throw new Error("Unreadable"); } }]) {
+    await tab.chooseImport(valid);
+    await tab.chooseImport(replacement);
+    assert.ok(tab.elements["#import-error"].textContent);
+    assert.equal(tab.elements["#import-preview"].hidden, true);
+    tab.confirmImport();
+    assert.equal(app.state.writes, 0);
+  }
+});
+
+test("an obsolete asynchronous file read cannot replace a newer preview or a cancellation", async () => {
+  for (const cancel of [false, true]) {
+    const app = browser();
+    const tab = app.tab();
+    let resolveOld;
+    const oldRead = tab.chooseImport({ text: () => new Promise(resolve => { resolveOld = resolve; }) });
+    if (cancel) tab.cancelImport();
+    else await tab.chooseImport(JSON.stringify([{ ...existing, id: "newer" }]));
+    resolveOld(JSON.stringify([{ ...existing, id: "older" }]));
+    await oldRead;
+    tab.confirmImport();
+    assert.deepEqual(JSON.parse(app.state.saved), cancel ? [existing] : [existing, { ...existing, id: "newer" }]);
+  }
+});
+
+test("an exported backup can be imported into empty storage and exported again", async () => {
+  const original = [existing, { id: "second", name: "<b>Résumé</b>", status: "In progress", nextAction: "<script>literal</script>" }];
+  const sourceApp = browser(original);
+  const sourceTab = sourceApp.tab();
+  sourceTab.exportProjects();
+  const file = await sourceTab.downloads[0].blob.text();
+  const targetApp = browser([]);
+  targetApp.state.saved = null;
+  const target = targetApp.tab();
+  await target.chooseImport(file);
+  target.confirmImport();
+  assert.deepEqual(JSON.parse(targetApp.state.saved), original);
+  assert.deepEqual(target.names(), original.map(project => project.name));
+  target.exportProjects();
+  assert.equal(await target.downloads[0].blob.text(), file);
+  sourceTab.flushDownloadCleanup();
+  target.flushDownloadCleanup();
+});
 
 test("export downloads readable JSON with a local-date filename and releases its URL", async () => {
   const records = [existing, { id: "other", name: "Résumé <b>text</b>", status: "Planned", nextAction: "", extra: { keep: true } }];

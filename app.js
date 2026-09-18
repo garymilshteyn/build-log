@@ -21,17 +21,23 @@ const cancelEditButton = document.querySelector("#cancel-edit");
 const exportButton = document.querySelector("#export-projects");
 const exportError = document.querySelector("#export-error");
 const exportMessage = document.querySelector("#export-message");
+const importButton = document.querySelector("#import-projects");
+const importFile = document.querySelector("#import-file");
+const importPreview = document.querySelector("#import-preview");
+const importSummary = document.querySelector("#import-summary");
+const confirmImportButton = document.querySelector("#confirm-import");
+const cancelImportButton = document.querySelector("#cancel-import");
+const importError = document.querySelector("#import-error");
+const importMessage = document.querySelector("#import-message");
 
 let projects = [];
 let storageLoaded = false;
 let editingId = null;
 let addDraft = null;
+let pendingImport = null;
+let importReadVersion = 0;
 
-function readProjects({ migrateIds = true } = {}) {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored === null) return [];
-
-  const savedProjects = JSON.parse(stored);
+function validateProjects(savedProjects, { requireIds = false } = {}) {
   const isValidProject = (project) =>
     project !== null &&
     typeof project === "object" &&
@@ -41,22 +47,31 @@ function readProjects({ migrateIds = true } = {}) {
     typeof project.nextAction === "string";
 
   if (!Array.isArray(savedProjects) || !savedProjects.every(isValidProject)) {
-    throw new Error("Saved projects have an invalid format.");
+    throw new Error("Expected an array of projects with nonblank names, valid statuses, and string nextAction fields.");
   }
 
   const ids = new Set();
   for (const project of savedProjects) {
-    if (project.id === undefined) continue;
+    if (project.id === undefined && !requireIds) continue;
     if (typeof project.id !== "string" || !project.id.trim() || ids.has(project.id)) {
-      throw new Error("Saved projects have invalid or duplicate IDs.");
+      throw new Error("Every project must have a unique, nonempty string ID.");
     }
     ids.add(project.id);
   }
+  return ids;
+}
+
+function readProjects({ migrateIds = true } = {}) {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored === null) return [];
+
+  const savedProjects = JSON.parse(stored);
+  const ids = validateProjects(savedProjects);
 
   // Persist IDs before rendering so refreshed and stale tabs identify the same records.
   // Keep every existing field, including fields this version does not use.
   if (savedProjects.some((project) => project.id === undefined)) {
-    if (!migrateIds) throw new Error("Saved projects need ID migration before export.");
+    if (!migrateIds) throw new Error("Saved projects need ID migration first.");
     const migratedProjects = savedProjects.map((project) =>
       project.id === undefined ? { ...project, id: createProjectId(ids) } : project
     );
@@ -103,6 +118,102 @@ function exportProjects() {
 }
 
 exportButton.addEventListener("click", exportProjects);
+
+function mergeImport(savedProjects, importedProjects) {
+  const existingIds = new Set(savedProjects.map((project) => project.id));
+  const additions = importedProjects.filter((project) => !existingIds.has(project.id));
+  return {
+    projects: [...savedProjects, ...additions],
+    added: additions.length,
+    skipped: importedProjects.length - additions.length,
+  };
+}
+
+importButton.addEventListener("click", () => {
+  // Permit choosing the same file again. Canceling the picker leaves app state alone.
+  importFile.value = "";
+  importFile.click();
+});
+
+importFile.addEventListener("change", async () => {
+  const file = importFile.files[0];
+  if (!file) return;
+  const version = ++importReadVersion;
+  pendingImport = null;
+  importPreview.hidden = true;
+  importError.textContent = "";
+  importMessage.textContent = "Reading backup…";
+
+  let contents;
+  try {
+    contents = await file.text();
+  } catch {
+    if (version !== importReadVersion) return;
+    importMessage.textContent = "";
+    importError.textContent = "Couldn’t read this file. Choose an accessible JSON backup and try again. Nothing was imported.";
+    return;
+  }
+  // An earlier file read must not replace a more recent selection.
+  if (version !== importReadVersion) return;
+  importMessage.textContent = "";
+
+  let records;
+  try {
+    records = JSON.parse(contents);
+  } catch {
+    importError.textContent = "This file is not valid JSON. Choose a Build Log JSON backup. Nothing was imported.";
+    return;
+  }
+  try {
+    validateProjects(records, { requireIds: true });
+  } catch (error) {
+    importError.textContent = `Invalid backup: ${error.message} Nothing was imported.`;
+    return;
+  }
+
+  // Copy only supported fields; never merge arbitrary file properties into records.
+  const importedProjects = records.map(({ id, name, status, nextAction }) => ({ id, name, status, nextAction }));
+  try {
+    const merge = mergeImport(readProjects({ migrateIds: false }), importedProjects);
+    importSummary.textContent = `${merge.added} new project(s) to add; ${merge.skipped} existing ID(s) to skip. Existing projects will be kept unchanged, even if the file has different fields. Counts will be recalculated when you confirm.`;
+    pendingImport = importedProjects;
+    importPreview.hidden = false;
+    confirmImportButton.focus();
+  } catch {
+    importError.textContent = "Couldn’t read existing projects for the preview. Check site storage; saved data may be invalid or still need ID migration. Nothing was imported. Choose the file again after resolving the problem.";
+  }
+});
+
+cancelImportButton.addEventListener("click", () => {
+  ++importReadVersion;
+  pendingImport = null;
+  importPreview.hidden = true;
+  importError.textContent = "";
+  importMessage.textContent = "";
+  importButton.focus();
+});
+
+confirmImportButton.addEventListener("click", () => {
+  if (pendingImport === null) return;
+  try {
+    // Recompute after the preview, without migrating or overwriting existing IDs.
+    // This read/write pair is still not atomic across simultaneous tab writes.
+    const merge = mergeImport(readProjects({ migrateIds: false }), pendingImport);
+    if (merge.added > 0) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(merge.projects));
+    }
+    projects = merge.projects;
+    storageLoaded = true;
+    renderProjects();
+    pendingImport = null;
+    importPreview.hidden = true;
+    importError.textContent = "";
+    importMessage.textContent = `Imported ${merge.added} new project(s); skipped ${merge.skipped} existing ID(s).`;
+    importButton.focus();
+  } catch {
+    importError.textContent = "Couldn’t import projects. Storage may be blocked, full, or contain invalid data. Nothing was imported; your drafts are unchanged. Check site storage, then confirm again to retry or choose Cancel.";
+  }
+});
 
 function createProjectId(ids) {
   let id;
