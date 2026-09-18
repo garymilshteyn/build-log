@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Portfolio website",
+    "nextAction": "Write a short introduction and choose two projects to showcase."
+  },
+  {
+    "name": "Maintenance tracker",
+    "nextAction": "List the fields needed to describe one repair request."
+  }
+]

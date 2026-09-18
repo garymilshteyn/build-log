@@ -49,6 +49,8 @@ function browser(initialProjects = [existing]) {
     const revoked = [];
     const timers = [];
     const downloadFailures = { createUrl: false, click: false };
+    const requests = [];
+    const network = { respond: async () => { throw new Error("No mock response configured"); } };
     const document = {
       body: element(),
       querySelector(selector) {
@@ -94,6 +96,7 @@ function browser(initialProjects = [existing]) {
     }
     vm.runInNewContext(source, {
       document, window, localStorage: storage, crypto: { randomUUID }, Blob, URL, Date: ExportDate,
+      fetch(url, options) { requests.push({ url, options }); return network.respond(); },
       setTimeout(callback, delay) { timers.push({ callback, delay }); },
     });
     const name = elements["#project-name"];
@@ -103,6 +106,8 @@ function browser(initialProjects = [existing]) {
     form.reset = () => { name.value = ""; status.value = "Planned"; nextAction.value = ""; };
     return {
       elements,
+      requests, network,
+      loadSuggestions() { return elements["#load-suggestions"].listeners.click(); },
       downloads, urls, revoked, downloadFailures,
       exportProjects() { elements["#export-projects"].listeners.click(); },
       openImport() { elements["#import-projects"].listeners.click(); },
@@ -1002,4 +1007,130 @@ test("tab updates preserve both the active edit and the suspended Add draft", ()
   assert.equal(b.elements["#project-status"].value, "In progress");
   assert.equal(b.elements["#next-action"].value, "Keep typing");
   assert.deepEqual(b.names(), [existing.name, "Other tab addition"]);
+});
+
+const sampleSuggestions = JSON.parse(fs.readFileSync(path.join(__dirname, "../data/project-suggestions.json"), "utf8"));
+
+test("suggestions fetch the static file without caching and replace safely rendered results", async () => {
+  const app = browser();
+  const tab = app.tab();
+  assert.equal(tab.requests.length, 0, "Loading must require a click");
+  const literal = { name: "<img src=x onerror=alert(1)>", nextAction: "<script>alert(1)</script>" };
+  tab.network.respond = async () => ({ ok: true, json: async () => [...sampleSuggestions, literal] });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await tab.loadSuggestions();
+    const items = tab.elements["#suggestions-list"].children;
+    assert.equal(items.length, 3);
+    assert.deepEqual(items.map(item => item.children.map(child => child.textContent)),
+      [...sampleSuggestions, literal].map(item => [item.name, item.nextAction]));
+    assert.equal(items[2].children[0].children.length, 0, "Markup stays plain text");
+    assert.equal(items[2].children[1].children.length, 0);
+    assert.equal(tab.elements["#load-suggestions"].disabled, false);
+    assert.equal(tab.elements["#suggestions-error"].textContent, "");
+  }
+  assert.equal(tab.requests.length, 2);
+  for (const request of tab.requests) {
+    assert.equal(request.url, "./data/project-suggestions.json");
+    assert.equal(request.options.cache, "no-store");
+  }
+  assert.equal(app.state.writes, 0);
+});
+
+test("suggestions stay loading through both request and JSON reading and ignore concurrent clicks", async () => {
+  const tab = browser().tab();
+  let resolveRequest;
+  let resolveJson;
+  const json = new Promise(resolve => { resolveJson = resolve; });
+  tab.network.respond = () => new Promise(resolve => { resolveRequest = resolve; });
+  const loading = tab.loadSuggestions();
+  assert.equal(tab.elements["#suggestions-message"].textContent, "Loading suggestions…");
+  assert.equal(tab.elements["#load-suggestions"].disabled, true);
+  await tab.loadSuggestions();
+  assert.equal(tab.requests.length, 1);
+  resolveRequest({ ok: true, json: () => json });
+  await Promise.resolve();
+  assert.equal(tab.elements["#load-suggestions"].disabled, true);
+  resolveJson(sampleSuggestions);
+  await loading;
+  assert.equal(tab.elements["#load-suggestions"].disabled, false);
+  assert.equal(tab.elements["#suggestions-list"].children.length, 2);
+});
+
+test("empty suggestions replace previous results with an informative message", async () => {
+  const tab = browser().tab();
+  tab.network.respond = async () => ({ ok: true, json: async () => sampleSuggestions });
+  await tab.loadSuggestions();
+  tab.network.respond = async () => ({ ok: true, json: async () => [] });
+  await tab.loadSuggestions();
+  assert.equal(tab.elements["#suggestions-list"].children.length, 0);
+  assert.equal(tab.elements["#suggestions-message"].textContent, "No suggestions available.");
+  assert.equal(tab.elements["#suggestions-error"].textContent, "");
+});
+
+test("HTTP, network, JSON, and validation failures allow a successful retry", async (t) => {
+  let httpJsonRead = false;
+  const failures = [
+    ["HTTP", async () => ({ ok: false, status: 404, json() { httpJsonRead = true; return sampleSuggestions; } })],
+    ["network", async () => { throw new TypeError("Failed to fetch"); }],
+    ["JSON", async () => ({ ok: true, json: async () => { throw new SyntaxError("Invalid JSON"); } })],
+    ...[null, {}, [null], ["idea"], [{ name: " ", nextAction: "Do it" }],
+      [{ name: 12, nextAction: "Do it" }], [{ name: "Idea" }],
+      [{ name: "Idea", nextAction: "\n\t" }], [{ name: "Idea", nextAction: 1 }],
+      [sampleSuggestions[0], { name: "Invalid later record" }]
+    ].map((value, index) => [`validation ${index}`, async () => ({ ok: true, json: async () => value })]),
+  ];
+  for (const [label, respond] of failures) {
+    await t.test(label, async () => {
+      const tab = browser().tab();
+      tab.network.respond = respond;
+      await tab.loadSuggestions();
+      assert.equal(httpJsonRead, false, "HTTP failures must be checked before reading JSON");
+      assert.equal(tab.elements["#suggestions-list"].children.length, 0);
+      assert.equal(tab.elements["#suggestions-message"].textContent, "");
+      assert.match(tab.elements["#suggestions-error"].textContent, /Couldn’t load suggestions.*try Load suggestions again/);
+      assert.equal(tab.elements["#load-suggestions"].disabled, false);
+      tab.network.respond = async () => ({ ok: true, json: async () => sampleSuggestions });
+      await tab.loadSuggestions();
+      assert.equal(tab.elements["#suggestions-list"].children.length, 2);
+      assert.equal(tab.elements["#suggestions-error"].textContent, "");
+    });
+  }
+});
+
+test("suggestions success and failure leave saved projects, Add/Edit drafts, and form feedback intact", async () => {
+  const app = browser();
+  const tab = app.tab();
+  const saved = app.state.saved;
+  tab.draft("Unfinished Add");
+  for (const editing of [false, true]) {
+    if (editing) {
+      tab.edit();
+      tab.editDraft("Unfinished Edit", "Done", "Edit next action");
+    }
+    const fields = ["#project-name", "#project-status", "#next-action", "#form-heading"];
+    const before = fields.map(id => [tab.elements[id].value, tab.elements[id].textContent]);
+    tab.elements["#error-message"].textContent = "Keep form error";
+    tab.elements["#success-message"].textContent = "Keep form feedback";
+    app.state.failRead = true;
+    app.state.failWrite = true;
+    for (const fail of [false, true]) {
+      tab.network.respond = async () => {
+        if (fail) throw new Error("Offline");
+        return { ok: true, json: async () => sampleSuggestions };
+      };
+      await tab.loadSuggestions();
+      assert.deepEqual(fields.map(id => [tab.elements[id].value, tab.elements[id].textContent]), before);
+      assert.equal(tab.elements["#error-message"].textContent, "Keep form error");
+      assert.equal(tab.elements["#success-message"].textContent, "Keep form feedback");
+      assert.equal(app.state.saved, saved);
+      assert.equal(app.state.writes, 0);
+      assert.deepEqual(tab.names(), [existing.name]);
+    }
+    app.state.failRead = false;
+    app.state.failWrite = false;
+  }
+  tab.cancelEdit();
+  assert.equal(tab.elements["#project-name"].value, "Unfinished Add");
+  assert.equal(tab.elements["#project-status"].value, "In progress");
+  assert.equal(tab.elements["#next-action"].value, "Keep typing");
 });

@@ -37,6 +37,56 @@ let addDraft = null;
 let pendingImport = null;
 let importReadVersion = 0;
 
+const loadSuggestionsButton = document.querySelector("#load-suggestions");
+const suggestionsList = document.querySelector("#suggestions-list");
+const suggestionsMessage = document.querySelector("#suggestions-message");
+const suggestionsError = document.querySelector("#suggestions-error");
+
+async function loadSuggestions() {
+  if (loadSuggestionsButton.disabled) return;
+
+  loadSuggestionsButton.disabled = true;
+  suggestionsMessage.textContent = "Loading suggestions…";
+  suggestionsError.textContent = "";
+  suggestionsList.replaceChildren();
+
+  try {
+    const response = await fetch("./data/project-suggestions.json", { cache: "no-store" });
+    if (!response.ok) throw new Error("Suggestions request failed");
+
+    const suggestions = await response.json();
+    if (!Array.isArray(suggestions) || !suggestions.every((suggestion) =>
+      suggestion !== null && typeof suggestion === "object" &&
+      typeof suggestion.name === "string" && suggestion.name.trim() !== "" &&
+      typeof suggestion.nextAction === "string" && suggestion.nextAction.trim() !== ""
+    )) {
+      throw new Error("Invalid suggestions data");
+    }
+
+    for (const suggestion of suggestions) {
+      const item = document.createElement("li");
+      item.className = "project";
+      const name = document.createElement("h3");
+      name.textContent = suggestion.name;
+      const nextAction = document.createElement("p");
+      nextAction.className = "next-action";
+      nextAction.textContent = suggestion.nextAction;
+      item.append(name, nextAction);
+      suggestionsList.append(item);
+    }
+    suggestionsMessage.textContent = suggestions.length === 0
+      ? "No suggestions available."
+      : "Suggestions loaded. These ideas have not been added to your projects.";
+  } catch {
+    suggestionsMessage.textContent = "";
+    suggestionsError.textContent = "Couldn’t load suggestions. Check your connection and that data/project-suggestions.json is available and contains valid suggestion data, then try Load suggestions again. Use the local server when running locally.";
+  } finally {
+    loadSuggestionsButton.disabled = false;
+  }
+}
+
+loadSuggestionsButton.addEventListener("click", loadSuggestions);
+
 function validateProjects(savedProjects, { requireIds = false } = {}) {
   const isValidProject = (project) =>
     project !== null &&

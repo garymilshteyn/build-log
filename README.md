@@ -21,6 +21,7 @@ No account required. Projects are saved only in the browser you use; they do not
 - Edit a project's name, status, and next action, with Save changes and Cancel.
 - Export saved projects as a readable JSON backup.
 - Import JSON backups after reviewing a preview and confirming; existing IDs are preserved.
+- Load sample project suggestions without adding them to saved projects.
 
 ## Run locally
 
@@ -74,6 +75,14 @@ Confirmation rereads current storage and recomputes the merge, so counts can cha
 
 Add/Edit drafts and form mode stay intact. File-read, validation, or storage failures show an error without partially importing. A failed confirmation keeps the preview for retry or cancellation; after a preview failure, resolve the issue and select the file again. Existing storage must be readable and valid, with its normal ID migration completed; preview and confirmation never perform that migration. Reloading loses unsaved drafts and the pending preview. Large backups are read into memory and may exceed browser storage limits; the simultaneous-tab write limitation above still applies.
 
+## Project suggestions
+
+Click **Load suggestions** in the separate Project suggestions section to read sample ideas. This is an HTTP request exercise using the static file `data/project-suggestions.json` served by the same site, not an external API or database. Run the local HTTP server described above instead of opening the HTML file directly.
+
+The async `loadSuggestions()` function uses `fetch` with `cache: "no-store"` to request the file without using or updating the HTTP cache. `await` waits for the response without blocking the page. The function checks `response.ok` for a successful HTTP status before calling `await response.json()` to read and parse the body. Parsing JSON does not validate its structure: the app then checks that it is an array whose entries have nonblank string names and next actions.
+
+While waiting, the button is disabled and the section shows “Loading suggestions…”. Results replace the previous suggestions and render as plain text. An empty array shows “No suggestions available.” HTTP, network, JSON, and validation failures show an error and reenable the button for retry. Suggestions are only ideas to read; loading them does not access project storage, add projects, or change Add/Edit drafts. Suggestions disappear on refresh and can be loaded again.
+
 ## Automated tests
 
 The [Automated tests workflow](.github/workflows/tests.yml) runs the existing regression tests on pull requests targeting `main` and pushes to `main`. It uses Node.js 24 LTS on Ubuntu with read-only repository permissions and reports any test failures in GitHub Actions.
@@ -84,11 +93,13 @@ To run the same check locally, use a supported Node.js LTS version (Node.js 24 t
 node --test tests/app.test.cjs
 ```
 
-No packages are required. These checks run the application with a minimal mock DOM, confirmation dialog, file-read/download APIs, and shared mock storage: ID migration, cancellation, editing and deletion by ID, edit validation, stale-tab additions/edits/deletions, storage-event updates, draft preservation, storage failures, JSON export, temporary download cleanup, and validated imports with confirmation and merge checks. They do not test real browser dialogs, file pickers, downloads, event delivery, or layout. Node.js is only needed for these checks, not to run the app.
+No packages are required. These checks run the application with a minimal mock DOM, confirmation dialog, file-read/download APIs, fetch responses, and shared mock storage: ID migration, cancellation, editing and deletion by ID, edit validation, stale-tab additions/edits/deletions, storage-event updates, draft preservation, storage failures, JSON export, temporary download cleanup, and validated imports with confirmation and merge checks, and suggestion loading, validation, failures, retry, and draft preservation. They do not test real HTTP requests, browser dialogs, file pickers, downloads, event delivery, or layout. Node.js is only needed for these checks, not to run the app.
 
 ## Manual checks
 
 These are checks to perform in a browser, not a record of completed verification.
+
+- Click Load suggestions and check the two sample ideas. In developer tools, throttle the network to observe the loading message and disabled button; inspect the request to `data/project-suggestions.json`. Load again and confirm no duplicate entries appear. Set the network offline, retry, then restore it and retry successfully. Saved projects and unfinished Add/Edit drafts should remain unchanged. Check keyboard activation and the section at a narrow mobile width.
 
 - Select an exported backup with Import projects, check the preview, and cancel before repeating and confirming. Import it twice; matching IDs should be skipped, existing fields should remain unchanged, and no duplicates should appear. Repeat with an empty array, malformed JSON, and a file containing duplicate IDs; invalid files should not change storage.
 - Leave an Add/Edit draft unfinished while importing. Check that its fields and mode survive. Make unrelated changes in another tab between preview and confirmation; they should remain after the import. Test the file picker, Confirm import, and Cancel with the keyboard.
@@ -116,9 +127,10 @@ These are checks to perform in a browser, not a record of completed verification
 
 ## Files
 
-- `index.html`: Page structure, one labeled form shared by Add and Edit modes, and project list.
+- `index.html`: Page structure, one labeled form shared by Add and Edit modes, project list, and separate suggestions section.
 - `styles.css`: Layout, responsive styles, status badges, and keyboard focus indicators.
-- `app.js`: Validation, safe text rendering, stable IDs, editing, confirmed deletion/import, JSON export, localStorage persistence, tab updates, and error messages.
+- `app.js`: Validation, safe text rendering, stable IDs, editing, confirmed deletion/import, JSON export, localStorage persistence, tab updates, async suggestion loading, and error messages.
+- `data/project-suggestions.json`: The two static sample ideas requested by Load suggestions.
 - `tests/app.test.cjs`: Regression tests using Node’s built-in test runner and mocked browser APIs.
 - `.github/workflows/tests.yml`: GitHub Actions workflow that runs the tests on pull requests targeting `main` and pushes to `main`.
 
