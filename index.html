@@ -52,9 +52,21 @@
           <h2 id="projects-heading">Your projects</h2>
           <p>Saved in this browser.</p>
           <button id="export-projects" type="button" class="secondary-button">Export projects</button>
+          <button id="import-projects" type="button" class="secondary-button">Import projects</button>
+          <input id="import-file" type="file" accept=".json,application/json" aria-label="Choose a project backup JSON file" hidden>
         </div>
         <p id="export-error" class="feedback error" role="alert"></p>
         <p id="export-message" class="feedback success" role="status"></p>
+        <p id="import-error" class="feedback error" role="alert"></p>
+        <p id="import-message" class="feedback success" role="status"></p>
+        <section id="import-preview" class="panel import-preview" aria-labelledby="import-heading" hidden>
+          <h3 id="import-heading">Import preview</h3>
+          <p id="import-summary" role="status"></p>
+          <div class="form-actions">
+            <button id="confirm-import" type="button">Confirm import</button>
+            <button id="cancel-import" type="button" class="secondary-button">Cancel</button>
+          </div>
+        </section>
         <p id="empty-state" class="empty-state">No projects yet. Add your first project above.</p>
         <ul id="project-list" class="project-list" role="list"></ul>
       </section>

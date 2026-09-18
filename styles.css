@@ -220,6 +220,14 @@ button:focus-visible {
   gap: 0.75rem;
 }
 
+.import-preview {
+  margin: 1rem 0;
+}
+
+.import-preview p {
+  margin: 0.75rem 0;
+}
+
 .secondary-button {
   color: #265e4d;
   border-color: #dce2d9;
