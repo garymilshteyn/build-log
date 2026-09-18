@@ -4,6 +4,12 @@ An app for organizing my software projects and their next actions.
 
 Built with plain HTML, CSS, and JavaScript. No frameworks, backend, or login.
 
+## Live demo
+
+[Try Build Log](https://build-log-iota.vercel.app)
+
+No account required. Projects are saved only in the browser you use; they do not sync across browsers or devices.
+
 ## Features
 
 - Add a project with a required name, a status (Planned, In progress, or Done), and an optional next action.
@@ -93,5 +99,4 @@ These are checks to perform in a browser, not a record of completed verification
 
 ## Planned improvements
 
-- Deployment and a live-demo link.
 - Login and cloud storage with Supabase.
