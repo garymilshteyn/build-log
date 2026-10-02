@@ -41,6 +41,8 @@ The local server only serves static files; there is no application backend.
 
 ## Data storage and limitations
 
+The separate [React lesson prototype](react-prototype/README.md) implements the first React milestone with in-memory state. It has its own setup and does not replace this static app.
+
 Use the same browser and URL (including port) to return to your saved projects. Projects stay on this browser only; clearing its site data removes them. Opening `index.html` directly is not recommended because localStorage behavior for file URLs varies by browser.
 
 Each addition, saved edit, confirmed deletion, or confirmed import rereads the latest stored projects, and other open tabs update their lists when storage changes without clearing their forms. This preserves unrelated sequential changes from stale tabs. Truly simultaneous writes (including imports and initial ID migration) can still conflict because the localStorage read and write are not one atomic operation. If two tabs edit the same project, the last successful save replaces its editable fields; there is no conflict resolution.
